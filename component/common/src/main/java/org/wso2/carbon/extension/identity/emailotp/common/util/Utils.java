@@ -108,6 +108,12 @@ public class Utils {
                 Integer.parseInt(otpValidityPeriodValue) * 1000 : Constants.DEFAULT_EMAIL_OTP_EXPIRY_TIME;
         configs.setOtpValidityPeriod(otpValidityPeriod);
 
+        String loginOtpValidityPeriodValue =
+                StringUtils.trim(properties.getProperty(Constants.LOGIN_EMAIL_OTP_VALIDITY_PERIOD));
+        int loginOtpValidityPeriod = StringUtils.isNumeric(loginOtpValidityPeriodValue) ?
+                Integer.parseInt(loginOtpValidityPeriodValue) * 1000 : Constants.DEFAULT_EMAIL_OTP_EXPIRY_TIME;
+        configs.setLoginOtpValidityPeriod(loginOtpValidityPeriod);
+
         // If not defined, defaults to 'zero' to renew always.
         String otpRenewIntervalValue = StringUtils.trim(
                 properties.getProperty(Constants.EMAIL_OTP_RENEWAL_INTERVAL));

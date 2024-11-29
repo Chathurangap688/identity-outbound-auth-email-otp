@@ -44,6 +44,7 @@ public class Constants {
     public static final String EMAIL_OTP_ENABLED = "emailOtp.enabled";
     public static final String EMAIL_OTP_LENGTH = "emailOtp.tokenLength";
     public static final String EMAIL_OTP_VALIDITY_PERIOD = "emailOtp.tokenValidityPeriod";
+    public static final String LOGIN_EMAIL_OTP_VALIDITY_PERIOD = "emailOtp.loginOtpValidityPeriod";
     public static final String EMAIL_OTP_ALPHA_NUMERIC_OTP = "emailOtp.isEnableAlphanumericToken";
     public static final String EMAIL_OTP_TRIGGER_OTP_NOTIFICATION = "emailOtp.triggerNotification";
     public static final String EMAIL_OTP_RENEWAL_INTERVAL = "emailOtp.tokenRenewalInterval";

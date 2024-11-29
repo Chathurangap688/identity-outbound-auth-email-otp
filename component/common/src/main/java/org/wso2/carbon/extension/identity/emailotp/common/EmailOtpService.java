@@ -48,10 +48,8 @@ public interface EmailOtpService {
      * @return OTP verification result.
      * @throws EmailOtpException Thrown if any server or client error occurred.
      */
-    default ValidationResponseDTO verifyEmailOTP(String transactionId, String userId, String emailOTP) throws
-            EmailOtpException {
-        return null;
-    }
+    ValidationResponseDTO verifyEmailOTP(String transactionId, String userId, String emailOTP) throws
+            EmailOtpException;
 
     /**
      * This method will generate an OTP and send an EMAIL notification.

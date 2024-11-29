@@ -102,9 +102,10 @@ public class EmailOtpServiceImpl implements EmailOtpService {
 
         GenerationResponseDTO responseDTO = new GenerationResponseDTO();
         // If WSO2IS is handling the notifications, don't send the OTP in the response.
-        if (!sendNotification) {
+//        UNITYSUB-623/CS0268873
+//        if (!sendNotification) {
             responseDTO.setEmailOTP(sessionDTO.getOtpToken());
-        }
+//        }
         responseDTO.setTransactionId(sessionDTO.getTransactionId());
         return responseDTO;
     }
@@ -195,6 +196,7 @@ public class EmailOtpServiceImpl implements EmailOtpService {
         return new ValidationResponseDTO(userId, true);
     }
 
+
     private ValidationResponseDTO isValid(SessionDTO sessionDTO, String emailOtp, String userId,
                                           String transactionId, boolean showFailureReason) {
 
@@ -265,7 +267,13 @@ public class EmailOtpServiceImpl implements EmailOtpService {
 
         boolean isAlphaNumericOtpEnabled = EmailOtpServiceDataHolder.getConfigs().isAlphaNumericOTP();
         int otpLength = EmailOtpServiceDataHolder.getConfigs().getOtpLength();
-        int otpValidityPeriod = EmailOtpServiceDataHolder.getConfigs().getOtpValidityPeriod();
+        int otpValidityPeriod = EmailOtpServiceDataHolder.getConfigs().getLoginOtpValidityPeriod();
+        StackTraceElement[] stElements = Thread.currentThread().getStackTrace();
+        for (StackTraceElement element : stElements) {
+            if (element.getClassName().equals("org.wso2.carbon.identity.api.otp.service.emailotp.impl.EmailotpApiServiceImpl")) {
+                otpValidityPeriod = EmailOtpServiceDataHolder.getConfigs().getOtpValidityPeriod();
+            }
+        }
 
         // Generate OTP.
         String transactionId = Utils.createTransactionId();
@@ -291,7 +299,13 @@ public class EmailOtpServiceImpl implements EmailOtpService {
         if (log.isDebugEnabled()) {
             log.debug(String.format("Sending Email OTP notification to user Id: %s.", user.getUserID()));
         }
-
+        boolean otpGenarateByApi = false;
+        StackTraceElement[] stElements = Thread.currentThread().getStackTrace();
+        for (StackTraceElement element : stElements) {
+            if (element.getClassName().equals("org.wso2.carbon.identity.api.otp.service.emailotp.impl.EmailotpApiServiceImpl")) {
+                otpGenarateByApi = true;
+            }
+        }
         HashMap<String, Object> properties = new HashMap<>();
         properties.put(IdentityEventConstants.EventProperty.USER_NAME, user.getUsername());
         properties.put(IdentityEventConstants.EventProperty.USER_STORE_DOMAIN, user.getUserStoreDomain());
@@ -304,7 +318,9 @@ public class EmailOtpServiceImpl implements EmailOtpService {
 
         Event event = new Event(IdentityEventConstants.Event.TRIGGER_NOTIFICATION, properties);
         try {
-            IdentityRecoveryServiceDataHolder.getInstance().getIdentityEventService().handleEvent(event);
+            if(!otpGenarateByApi){
+                IdentityRecoveryServiceDataHolder.getInstance().getIdentityEventService().handleEvent(event);
+            }
         } catch (IdentityEventException e) {
             throw Utils.handleServerException(Constants.ErrorMessage.SERVER_NOTIFICATION_SENDING_ERROR,
                     user.getFullQualifiedUsername(), e);
