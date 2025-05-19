@@ -25,14 +25,33 @@ import org.apache.commons.logging.LogFactory;
 import org.wso2.carbon.extension.identity.emailotp.common.constant.Constants;
 import org.wso2.carbon.extension.identity.emailotp.common.dto.ConfigsDTO;
 import org.wso2.carbon.extension.identity.emailotp.common.exception.EmailOtpClientException;
+import org.wso2.carbon.extension.identity.emailotp.common.exception.EmailOtpException;
 import org.wso2.carbon.extension.identity.emailotp.common.exception.EmailOtpServerException;
 import org.wso2.carbon.extension.identity.emailotp.common.internal.EmailOtpServiceDataHolder;
+import org.wso2.carbon.identity.application.authentication.framework.exception.FrameworkException;
+import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkUtils;
+import org.wso2.carbon.identity.application.common.model.Property;
+import org.wso2.carbon.identity.core.util.IdentityTenantUtil;
 import org.wso2.carbon.identity.event.IdentityEventConfigBuilder;
 import org.wso2.carbon.identity.event.IdentityEventException;
 import org.wso2.carbon.identity.event.bean.ModuleConfiguration;
+import org.wso2.carbon.identity.governance.IdentityGovernanceException;
+import org.wso2.carbon.identity.handler.event.account.lock.exception.AccountLockServiceException;
+import org.wso2.carbon.user.api.UserStoreException;
+import org.wso2.carbon.user.core.UserCoreConstants;
+import org.wso2.carbon.user.core.common.AbstractUserStoreManager;
+import org.wso2.carbon.user.core.common.User;
 
+import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
+
+import static org.wso2.carbon.identity.application.authentication.framework.util.FrameworkConstants.ACCOUNT_DISABLED_CLAIM_URI;
+import static org.wso2.carbon.identity.application.authentication.framework.util.FrameworkConstants.ResidentIdpPropertyName.ACCOUNT_DISABLE_HANDLER_ENABLE_PROPERTY;
+import static org.wso2.carbon.identity.handler.event.account.lock.constants.AccountConstants.ACCOUNT_LOCKED_PROPERTY;
+import static org.wso2.carbon.identity.handler.event.account.lock.constants.AccountConstants.ACCOUNT_UNLOCK_TIME_PROPERTY;
+import static org.wso2.carbon.identity.handler.event.account.lock.constants.AccountConstants.FAILED_LOGIN_ATTEMPTS_PROPERTY;
+import static org.wso2.carbon.identity.handler.event.account.lock.constants.AccountConstants.LOGIN_FAIL_TIMEOUT_RATIO_PROPERTY;
 
 /**
  * Util functions for Email OTP service.
@@ -108,6 +127,14 @@ public class Utils {
                 Integer.parseInt(otpValidityPeriodValue) * 1000 : Constants.DEFAULT_EMAIL_OTP_EXPIRY_TIME;
         configs.setOtpValidityPeriod(otpValidityPeriod);
 
+        boolean isEnableMultipleSessions = Boolean.parseBoolean(StringUtils.trim(
+                properties.getProperty(Constants.EMAIL_OTP_MULTIPLE_SESSIONS_ENABLED)));
+        configs.setEnableMultipleSessions(isEnableMultipleSessions);
+
+        boolean lockAccountOnFailedAttempts = Boolean.parseBoolean(StringUtils.trim(
+                properties.getProperty(Constants.EMAIL_OTP_LOCK_ACCOUNT_ON_FAILED_ATTEMPTS)));
+        configs.setLockAccountOnFailedAttempts(lockAccountOnFailedAttempts);
+
         // If not defined, defaults to 'zero' to renew always.
         String otpRenewIntervalValue = StringUtils.trim(
                 properties.getProperty(Constants.EMAIL_OTP_RENEWAL_INTERVAL));
@@ -142,6 +169,11 @@ public class Utils {
      * @param text Text that need to be hashed.
      * @return Encoded hash.
      */
+    public static String getHash(String text, String text2) {
+
+        return DigestUtils.sha256Hex(text + text2);
+    }
+
     public static String getHash(String text) {
 
         return DigestUtils.sha256Hex(text);
@@ -235,5 +267,87 @@ public class Utils {
             description = error.getDescription();
         }
         return new EmailOtpServerException(error.getMessage(), description, error.getCode());
+    }
+
+    /**
+     * Check whether a given user is locked.
+     *
+     * @param user The user.
+     * @return True if user account is locked.
+     */
+    public static boolean isAccountLocked(User user) throws EmailOtpServerException {
+
+        try {
+            if (user == null) {
+                return false;
+            }
+            return EmailOtpServiceDataHolder.getInstance().getAccountLockService().isAccountLocked(user.getUsername(),
+                    user.getTenantDomain(), user.getUserStoreDomain());
+        } catch (AccountLockServiceException e) {
+            throw Utils.handleServerException(Constants.ErrorMessage.SERVER_ERROR_VALIDATING_ACCOUNT_LOCK_STATUS,
+                    user.getUserID(), e);
+        }
+    }
+
+    public static boolean isUserDisabled(User user) throws EmailOtpException {
+
+        try {
+            if (!isAccountDisablingEnabled(user.getTenantDomain())) {
+                return false;
+            }
+            String accountDisabledClaimValue = getClaimValue(
+                    user.getUserID(), ACCOUNT_DISABLED_CLAIM_URI, user.getTenantDomain());
+            return Boolean.parseBoolean(accountDisabledClaimValue);
+        } catch (FrameworkException e) {
+            throw new EmailOtpException(e.getErrorCode(), e.getMessage(), e);
+        }
+    }
+
+    private static boolean isAccountDisablingEnabled(String tenantDomain) throws FrameworkException {
+
+        Property accountDisableConfigProperty = FrameworkUtils.getResidentIdpConfiguration(
+                ACCOUNT_DISABLE_HANDLER_ENABLE_PROPERTY, tenantDomain);
+
+        return accountDisableConfigProperty != null && Boolean.parseBoolean(accountDisableConfigProperty.getValue());
+    }
+
+    private static String getClaimValue(String userId, String claimURI, String tenantDomain) throws
+            FrameworkException {
+
+        try {
+            int tenantId = IdentityTenantUtil.getTenantId(tenantDomain);
+            AbstractUserStoreManager userStoreManager = (AbstractUserStoreManager) EmailOtpServiceDataHolder
+                    .getInstance().getRealmService().getTenantUserRealm(tenantId).getUserStoreManager();
+
+            Map<String, String> values = userStoreManager.getUserClaimValuesWithID(userId, new String[]{claimURI},
+                    UserCoreConstants.DEFAULT_PROFILE);
+            if (log.isDebugEnabled()) {
+                log.debug(String.format("%s claim value of user %s is set to: " + values.get(claimURI),
+                        claimURI, userId));
+            }
+            return values.get(claimURI);
+
+        } catch (UserStoreException e) {
+            throw new FrameworkException("Error occurred while retrieving claim: " + claimURI, e);
+        }
+    }
+
+    /**
+     * Get the account lock connector configurations.
+     *
+     * @param tenantDomain Tenant domain.
+     * @return Account lock connector configurations.
+     * @throws EmailOtpServerException Server exception while retrieving account lock configurations.
+     */
+    public static Property[] getAccountLockConnectorConfigs(String tenantDomain) throws EmailOtpServerException {
+
+        try {
+            return EmailOtpServiceDataHolder.getInstance().getIdentityGovernanceService().getConfiguration
+                    (new String[]{ACCOUNT_LOCKED_PROPERTY, FAILED_LOGIN_ATTEMPTS_PROPERTY, ACCOUNT_UNLOCK_TIME_PROPERTY,
+                            LOGIN_FAIL_TIMEOUT_RATIO_PROPERTY}, tenantDomain);
+        } catch (IdentityGovernanceException e) {
+            throw Utils.handleServerException(Constants.ErrorMessage.SERVER_ERROR_RETRIEVING_ACCOUNT_LOCK_CONFIGS, null,
+                    e);
+        }
     }
 }

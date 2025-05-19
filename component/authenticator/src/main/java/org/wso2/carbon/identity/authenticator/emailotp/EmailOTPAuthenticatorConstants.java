@@ -1,7 +1,7 @@
 /*
- *  Copyright (c) 2017, WSO2 Inc. (http://www.wso2.org) All Rights Reserved.
+ *  Copyright (c) 2017, WSO2 LLC. (https://www.wso2.com).
  *
- *  WSO2 Inc. licenses this file to you under the Apache License,
+ *  WSO2 LLC. licenses this file to you under the Apache License,
  *  Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License.
  *  You may obtain a copy of the License at
@@ -31,9 +31,9 @@ public class EmailOTPAuthenticatorConstants {
     public static final String AUTHENTICATOR_NAME = "EmailOTP";
     public static final String AUTHENTICATOR_FRIENDLY_NAME = "Email OTP";
 
-    public static final String ALGORITHM_NAME = "SHA1PRNG";
-    public static final String ALGORITHM_HMAC = "HmacSHA1";
-    public static final String ALGORITHM_HMAC_SHA = "HMAC-SHA-1";
+    public static final String ALGORITHM_NAME = "DRBG";
+    public static final String ALGORITHM_HMAC = "HmacSHA256";
+    public static final String ALGORITHM_HMAC_SHA = "HMAC-SHA-256";
     public static final int SECRET_KEY_LENGTH = 5;
     public static final int NUMBER_BASE = 2;
     public static final int NUMBER_DIGIT = 6;
@@ -79,6 +79,8 @@ public class EmailOTPAuthenticatorConstants {
     public static final String ADMIN_EMAIL = "[userId]";
     public static final String OTP_TOKEN = "otpToken";
     public static final String OTP_BACKUP_CODES_CLAIM = "http://wso2.org/claims/otpbackupcodes";
+    public static final String OTP_BACKUP_CODES_IDENTITY_CLAIM = "http://wso2.org/claims/identity/otpbackupcodes";
+    public static final String HANDLE_BACKUP_CODES_AS_IDENTITY_CLAIM = "OTPBackupCodes.UseIdentityClaims";
     public static final String BACKUP_CODES_SEPARATOR = ",";
 
     public static final String AXIS2 = "axis2.xml";
@@ -111,8 +113,10 @@ public class EmailOTPAuthenticatorConstants {
 
     public static final String IS_EMAILOTP_MANDATORY = "EMAILOTPMandatory";
     public static final String EMAILOTP_AUTHENTICATION_ERROR_PAGE_URL = "EmailOTPAuthenticationEndpointErrorPage";
+    public static final String ERROR_AUTH_FAILURE_PREFIX = "&authFailure=true&authFailureMsg=";
     public static final String ERROR_EMAILOTP_DISABLE = "&authFailure=true&authFailureMsg=emailotp.disable";
     public static final String SEND_OTP_DIRECTLY_DISABLE = "&authFailure=true&authFailureMsg=directly.send.otp.disable";
+    public static final String ERROR_TENANT_MISMATCH_MSG = "user.tenant.domain.mismatch.message";
     public static final String BASIC = "basic";
     public static final String FEDERETOR = "federator";
     public static final String SEND_OTP_TO_FEDERATED_EMAIL_ATTRIBUTE = "sendOTPToFederatedEmailAttribute";
@@ -128,6 +132,8 @@ public class EmailOTPAuthenticatorConstants {
     public static final String PASS_SP_NAME_TO_EVENT = "passSPNameToEvent";
 
     public static final String SCREEN_VALUE = "&screenValue=";
+    public static final String ERROR_TOKEN_EXPIRED_EMAIL_SENT = "&authFailure=true&authFailureMsg=token.expired.email.sent";
+    public static final String ERROR_TOKEN_EXPIRED = "&authFailure=true&authFailureMsg=token.expired";
     public static final String SHOW_EMAIL_ADDRESS_IN_UI = "showEmailAddressInUI";
     public static final String EMAIL_ADDRESS_REGEX = "emailAddressRegex";
     public static final String USE_EVENT_HANDLER_BASED_EMAIL_SENDER = "useEventHandlerBasedEmailSender";
@@ -166,7 +172,25 @@ public class EmailOTPAuthenticatorConstants {
     public static final String PROPERTY_ACCOUNT_LOCK_TIME = "account.lock.handler.Time";
     public static final String ERROR_USER_ACCOUNT_LOCKED = "&authFailure=true&authFailureMsg=user.account.locked";
     public static final String ADMIN_INITIATED = "AdminInitiated";
-
     public static final String MAX_EMAIL_OTP_ATTEMPTS_EXCEEDED = "MAX_EMAIL_OTP_ATTEMPTS_EXCEEDED";
+    public static final String IS_IDF_INITIATED_FROM_AUTHENTICATOR = "isIdfInitiatedFromAuthenticator";
+    public static final String IDF_HANDLER_NAME = "IdentifierExecutor";
+    public static final String USER = "user";
+    public static final String EMAIL_OTP_ALPHANUMERIC_OTP = "AlphanumericCharactersForOtp";
+    public static final String EMAIL_OTP_NUMERIC_OTP = "OnlyNumericCharactersForOtp";
+    public static final String IS_CHAR_IN_OTP = "IsCharInOTP";
+    public static final String EMAIL_OTP_EXPIRY_TIME = "EmailOtpExpiryTime";
+    public static final int EMAIL_OTP_MAX_EXPIRY_TIME = 1440;
+    public static final int EMAIL_OTP_MIN_EXPIRY_TIME = 1;
+    public static final String OTP_EXPIRE_TIME_DEFAULT_IN_MINS = "5";
+    public static final String EMAIL_OTP_LENGTH = "EmailOtpLength";
+    public static final int EMAIL_OTP_MIN_LENGTH = 4;
+    public static final int EMAIL_OTP_MAX_LENGTH = 10;
+    public static final String EMAIL_OTP_NUMERIC_CHAR_SET = "9245378016";
+    public static final String EMAIL_OTP_UPPER_CASE_ALPHABET_CHAR_SET = "KIGXHOYSPRWCEFMVUQLZDNABJT";
+    public static final String IS_REDIRECT_TO_EMAIL_OTP = "isRedirectToEmailOTP";
+    public static final String MULTI_OPTION_URI = "multiOptionURI";
+    public static final String SKIP_ACCOUNT_LOCK_CHECK_IN_INIT_AUTHENTICATION =
+            "skipAccountLockCheckInInitAuthentication";
 
 }

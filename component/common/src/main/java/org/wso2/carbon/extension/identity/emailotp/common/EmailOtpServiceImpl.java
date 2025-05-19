@@ -20,6 +20,7 @@ package org.wso2.carbon.extension.identity.emailotp.common;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.commons.lang.math.NumberUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -35,6 +36,8 @@ import org.wso2.carbon.extension.identity.emailotp.common.internal.EmailOtpServi
 import org.wso2.carbon.extension.identity.emailotp.common.util.OneTimePasswordUtils;
 import org.wso2.carbon.extension.identity.emailotp.common.util.Utils;
 import org.wso2.carbon.identity.application.authentication.framework.store.SessionDataStore;
+import org.wso2.carbon.identity.application.common.model.Property;
+import org.wso2.carbon.identity.core.util.IdentityUtil;
 import org.wso2.carbon.identity.event.IdentityEventConstants;
 import org.wso2.carbon.identity.event.IdentityEventException;
 import org.wso2.carbon.identity.event.event.Event;
@@ -51,12 +54,18 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
+import static org.wso2.carbon.identity.handler.event.account.lock.constants.AccountConstants.ACCOUNT_LOCKED_PROPERTY;
+import static org.wso2.carbon.identity.handler.event.account.lock.constants.AccountConstants.ACCOUNT_UNLOCK_TIME_PROPERTY;
+import static org.wso2.carbon.identity.handler.event.account.lock.constants.AccountConstants.FAILED_LOGIN_ATTEMPTS_PROPERTY;
+import static org.wso2.carbon.identity.handler.event.account.lock.constants.AccountConstants.LOGIN_FAIL_TIMEOUT_RATIO_PROPERTY;
+
 /**
  * This class implements the EmailOtpService interface.
  */
 public class EmailOtpServiceImpl implements EmailOtpService {
 
     private static final Log log = LogFactory.getLog(EmailOtpServiceImpl.class);
+    private static final boolean SHOW_FAILURE_REASON = EmailOtpServiceDataHolder.getConfigs().isShowFailureReason();
 
     @Override
     public GenerationResponseDTO generateEmailOTP(String userId) throws EmailOtpException {
@@ -87,6 +96,24 @@ public class EmailOtpServiceImpl implements EmailOtpService {
                     String.format("Error while retrieving user for the Id : %s.", userId), e);
         }
 
+        // Check if the user is locked.
+        if (Utils.isAccountLocked(user)) {
+            if (!SHOW_FAILURE_REASON) {
+                throw Utils.handleClientException(Constants.ErrorMessage.CLIENT_OTP_GENERATION_NOT_VALID,
+                        user.getUserID());
+            }
+            throw Utils.handleClientException(Constants.ErrorMessage.CLIENT_ACCOUNT_LOCKED, user.getUserID());
+        }
+
+        // Check if the user is disabled.
+        if (Utils.isUserDisabled(user)) {
+            if (!SHOW_FAILURE_REASON) {
+                throw Utils.handleClientException(Constants.ErrorMessage.CLIENT_OTP_GENERATION_NOT_VALID,
+                        user.getUserID());
+            }
+            throw Utils.handleClientException(Constants.ErrorMessage.CLIENT_ACCOUNT_DISABLED, user.getUserID());
+        }
+
         // If throttling is enabled, check if the resend request has sent too early.
         boolean resendThrottlingEnabled = EmailOtpServiceDataHolder.getConfigs().isResendThrottlingEnabled();
         if (resendThrottlingEnabled) {
@@ -98,7 +125,8 @@ public class EmailOtpServiceImpl implements EmailOtpService {
             throw Utils.handleClientException(Constants.ErrorMessage.CLIENT_BLANK_EMAIL_ADDRESS, user.getUserID());
         }
 
-        SessionDTO sessionDTO = issueOTP(user);
+        int emailOtpExpiryTime = EmailOtpServiceDataHolder.getConfigs().getOtpValidityPeriod();
+        SessionDTO sessionDTO = issueOTP(user, emailOtpExpiryTime);
 
         GenerationResponseDTO responseDTO = new GenerationResponseDTO();
         // If WSO2IS is handling the notifications, don't send the OTP in the response.
@@ -107,6 +135,77 @@ public class EmailOtpServiceImpl implements EmailOtpService {
         }
         responseDTO.setTransactionId(sessionDTO.getTransactionId());
         return responseDTO;
+    }
+
+    @Override
+    public GenerationResponseDTO generateEmailOTP(String userId, String emailOtpExpiryTime) throws EmailOtpException {
+
+        if (StringUtils.isBlank(userId)) {
+            throw Utils.handleClientException(Constants.ErrorMessage.CLIENT_EMPTY_USER_ID, null);
+        }
+
+            // Retrieve email only if notifications the are managed internally.
+            boolean sendNotification = EmailOtpServiceDataHolder.getConfigs().isTriggerNotification();
+            String[] requestedClaims =
+                    sendNotification ? new String[]{NotificationChannels.EMAIL_CHANNEL.getClaimUri()} : null;
+
+            // Retrieve user by ID.
+            AbstractUserStoreManager userStoreManager;
+            User user;
+            try {
+                userStoreManager = (AbstractUserStoreManager) EmailOtpServiceDataHolder.getInstance()
+                        .getRealmService().getTenantUserRealm(getTenantId()).getUserStoreManager();
+                user = userStoreManager.getUserWithID(userId, requestedClaims, UserCoreConstants.DEFAULT_PROFILE);
+            } catch (UserStoreException e) {
+                // Handle user not found.
+                String errorCode = ((org.wso2.carbon.user.core.UserStoreException) e).getErrorCode();
+                if (UserCoreErrorConstants.ErrorMessages.ERROR_CODE_NON_EXISTING_USER.getCode().equals(errorCode)) {
+                    throw Utils.handleClientException(Constants.ErrorMessage.CLIENT_INVALID_USER_ID, userId);
+                }
+                throw Utils.handleServerException(Constants.ErrorMessage.SERVER_USER_STORE_MANAGER_ERROR,
+                        String.format("Error while retrieving user for the Id : %s.", userId), e);
+            }
+
+            // Check if the user is locked.
+            if (Utils.isAccountLocked(user)) {
+                if (!SHOW_FAILURE_REASON) {
+                    throw Utils.handleClientException(Constants.ErrorMessage.CLIENT_OTP_GENERATION_NOT_VALID,
+                            user.getUserID());
+                }
+                throw Utils.handleClientException(Constants.ErrorMessage.CLIENT_ACCOUNT_LOCKED, user.getUserID());
+            }
+
+            // Check if the user is disabled.
+            if (Utils.isUserDisabled(user)) {
+                if (!SHOW_FAILURE_REASON) {
+                    throw Utils.handleClientException(Constants.ErrorMessage.CLIENT_OTP_GENERATION_NOT_VALID,
+                            user.getUserID());
+                }
+                throw Utils.handleClientException(Constants.ErrorMessage.CLIENT_ACCOUNT_DISABLED, user.getUserID());
+            }
+
+            // If throttling is enabled, check if the resend request has sent too early.
+            boolean resendThrottlingEnabled = EmailOtpServiceDataHolder.getConfigs().isResendThrottlingEnabled();
+            if (resendThrottlingEnabled) {
+                shouldThrottle(userId);
+            }
+
+            String emailAddress = sendNotification ? getEmailAddress(user) : null;
+            if (sendNotification && StringUtils.isBlank(emailAddress)) {
+                throw Utils.handleClientException(Constants.ErrorMessage.CLIENT_BLANK_EMAIL_ADDRESS, user.getUserID());
+            }
+
+            SessionDTO sessionDTO = issueOTP(user, Integer.parseInt(emailOtpExpiryTime));
+
+            GenerationResponseDTO responseDTO = new GenerationResponseDTO();
+            // If WSO2IS is handling the notifications, don't send the OTP in the response.
+            if (!sendNotification) {
+                responseDTO.setEmailOTP(sessionDTO.getOtpToken());
+            }
+            responseDTO.setTransactionId(sessionDTO.getTransactionId());
+            responseDTO.setEmailOtpExpiryTime(emailOtpExpiryTime);
+            return responseDTO;
+
     }
 
     @Override
@@ -122,39 +221,82 @@ public class EmailOtpServiceImpl implements EmailOtpService {
                     Constants.ErrorMessage.CLIENT_MANDATORY_VALIDATION_PARAMETERS_EMPTY, missingParam);
         }
 
-        boolean showFailureReason = EmailOtpServiceDataHolder.getConfigs().isShowFailureReason();
+        boolean isEnableMultipleSessions = EmailOtpServiceDataHolder.getConfigs().isEnableMultipleSessions();
 
         // Retrieve session from the database.
-        String sessionId = Utils.getHash(userId);
-        String jsonString = (String) SessionDataStore.getInstance()
-                .getSessionData(sessionId, Constants.SESSION_TYPE_OTP);
-        if (StringUtils.isBlank(jsonString)) {
-            if (log.isDebugEnabled()) {
-                log.debug(String.format("No OTP session found for the user : %s.", userId));
-            }
-            FailureReasonDTO error = showFailureReason
-                    ? new FailureReasonDTO(Constants.ErrorMessage.CLIENT_NO_OTP_FOR_USER, userId)
-                    : null;
-            return new ValidationResponseDTO(userId, false, error);
-        }
-        SessionDTO sessionDTO;
-        try {
-            sessionDTO = new ObjectMapper().readValue(jsonString, SessionDTO.class);
-        } catch (IOException e) {
-            throw Utils.handleServerException(Constants.ErrorMessage.SERVER_JSON_SESSION_MAPPER_ERROR, null, e);
-        }
 
-        ValidationResponseDTO responseDTO = isValid(sessionDTO, emailOTP, userId, transactionId, showFailureReason);
-        if (!responseDTO.isValid()) {
-            return responseDTO;
+        if(!isEnableMultipleSessions) {
+            String sessionId = Utils.getHash(userId);
+            String jsonString = (String) SessionDataStore.getInstance()
+                    .getSessionData(sessionId, Constants.SESSION_TYPE_OTP);
+            if (StringUtils.isBlank(jsonString)) {
+                if (log.isDebugEnabled()) {
+                    log.debug(String.format("No OTP session found for the user : %s.", userId));
+                }
+                FailureReasonDTO error = SHOW_FAILURE_REASON
+                        ? new FailureReasonDTO(Constants.ErrorMessage.CLIENT_NO_OTP_FOR_USER, userId)
+                        : null;
+                return new ValidationResponseDTO(userId, false, error);
+            }
+            SessionDTO sessionDTO;
+            try {
+                sessionDTO = new ObjectMapper().readValue(jsonString, SessionDTO.class);
+            } catch (IOException e) {
+                throw Utils.handleServerException(Constants.ErrorMessage.SERVER_JSON_SESSION_MAPPER_ERROR, null, e);
+            }
+
+            ValidationResponseDTO responseDTO = isValid(sessionDTO, emailOTP, userId, transactionId,
+                    SHOW_FAILURE_REASON,
+                    true);
+            if (!responseDTO.isValid()) {
+                return responseDTO;
+            }
+            // Valid OTP. Clear OTP session data.
+                SessionDataStore.getInstance().clearSessionData(Utils.getHash(userId), Constants.SESSION_TYPE_OTP);
+
+            resetOtpFailedAttempts(userId);
+
+            return new ValidationResponseDTO(userId, true);
+        } else {
+            String sessionId = Utils.getHash(userId, transactionId);
+            String jsonString = (String) SessionDataStore.getInstance()
+                    .getSessionData(sessionId, Constants.SESSION_TYPE_OTP);
+            if (StringUtils.isBlank(jsonString)) {
+                if (log.isDebugEnabled()) {
+                    log.debug(String.format("No OTP session found for the user : %s.", userId));
+                }
+                FailureReasonDTO error = SHOW_FAILURE_REASON
+                        ? new FailureReasonDTO(Constants.ErrorMessage.CLIENT_NO_OTP_FOR_USER, userId)
+                        : null;
+                return new ValidationResponseDTO(userId, false, error);
+            }
+            SessionDTO sessionDTO;
+            try {
+                sessionDTO = new ObjectMapper().readValue(jsonString, SessionDTO.class);
+            } catch (IOException e) {
+                throw Utils.handleServerException(Constants.ErrorMessage.SERVER_JSON_SESSION_MAPPER_ERROR, null, e);
+            }
+
+            ValidationResponseDTO responseDTO = isValid(sessionDTO, emailOTP, userId, transactionId,
+                    SHOW_FAILURE_REASON,
+                    true);
+            if (!responseDTO.isValid()) {
+                return responseDTO;
+            }
+
+            // Valid OTP. Clear OTP session data.
+            SessionDataStore.getInstance().clearSessionData(Utils.getHash(userId, transactionId), Constants.SESSION_TYPE_OTP);
+
+            resetOtpFailedAttempts(userId);
+
+            return new ValidationResponseDTO(userId, true);
         }
-        // Valid OTP. Clear OTP session data.
-        SessionDataStore.getInstance().clearSessionData(sessionId, Constants.SESSION_TYPE_OTP);
-        return new ValidationResponseDTO(userId, true);
     }
 
     @Override
     public ValidationResponseDTO verifyEmailOTP(String transactionId, String userId, String emailOTP) throws EmailOtpException {
+
+        boolean isEnableMultipleSessions = EmailOtpServiceDataHolder.getConfigs().isEnableMultipleSessions();
 
         // Sanitize inputs.
         if (StringUtils.isBlank(transactionId) || StringUtils.isBlank(userId) || StringUtils.isBlank(emailOTP)) {
@@ -165,50 +307,105 @@ public class EmailOtpServiceImpl implements EmailOtpService {
                     Constants.ErrorMessage.CLIENT_MANDATORY_VALIDATION_PARAMETERS_EMPTY, missingParam);
         }
 
-        boolean showFailureReason = EmailOtpServiceDataHolder.getConfigs().isShowFailureReason();
-
         // Retrieve session from the database.
-        String sessionId = Utils.getHash(userId);
-        String jsonString = (String) SessionDataStore.getInstance()
-                .getSessionData(sessionId, Constants.SESSION_TYPE_OTP);
-        if (StringUtils.isBlank(jsonString)) {
-            if (log.isDebugEnabled()) {
-                log.debug(String.format("No OTP session found for the user : %s.", userId));
+        if(!isEnableMultipleSessions) {
+            String sessionId = Utils.getHash(userId);
+            String jsonString = (String) SessionDataStore.getInstance()
+                    .getSessionData(sessionId, Constants.SESSION_TYPE_OTP);
+            if (StringUtils.isBlank(jsonString)) {
+                if (log.isDebugEnabled()) {
+                    log.debug(String.format("No OTP session found for the user : %s.", userId));
+                }
+                FailureReasonDTO error = SHOW_FAILURE_REASON
+                        ? new FailureReasonDTO(Constants.ErrorMessage.CLIENT_NO_OTP_FOR_USER, userId)
+                        : null;
+                return new ValidationResponseDTO(userId, false, error);
             }
-            FailureReasonDTO error = showFailureReason
-                    ? new FailureReasonDTO(Constants.ErrorMessage.CLIENT_NO_OTP_FOR_USER, userId)
-                    : null;
-            return new ValidationResponseDTO(userId, false, error);
-        }
-        SessionDTO sessionDTO;
-        try {
-            sessionDTO = new ObjectMapper().readValue(jsonString, SessionDTO.class);
-        } catch (IOException e) {
-            throw Utils.handleServerException(Constants.ErrorMessage.SERVER_JSON_SESSION_MAPPER_ERROR, null, e);
-        }
+            SessionDTO sessionDTO;
+            try {
+                sessionDTO = new ObjectMapper().readValue(jsonString, SessionDTO.class);
+            } catch (IOException e) {
+                throw Utils.handleServerException(Constants.ErrorMessage.SERVER_JSON_SESSION_MAPPER_ERROR, null, e);
+            }
 
-        ValidationResponseDTO responseDTO = isValid(sessionDTO, emailOTP, userId, transactionId, showFailureReason);
-        if (!responseDTO.isValid()) {
-            return responseDTO;
-        }
+            ValidationResponseDTO responseDTO = isValid(sessionDTO, emailOTP, userId, transactionId,
+                    SHOW_FAILURE_REASON,
+                    false);
+            if (!responseDTO.isValid()) {
+                return responseDTO;
+            }
 
-        return new ValidationResponseDTO(userId, true);
+            return new ValidationResponseDTO(userId, true);
+        } else {
+            String sessionId = Utils.getHash(userId, transactionId);
+            String jsonString = (String) SessionDataStore.getInstance()
+                    .getSessionData(sessionId, Constants.SESSION_TYPE_OTP);
+            if (StringUtils.isBlank(jsonString)) {
+                if (log.isDebugEnabled()) {
+                    log.debug(String.format("No OTP session found for the user : %s.", userId));
+                }
+                FailureReasonDTO error = SHOW_FAILURE_REASON
+                        ? new FailureReasonDTO(Constants.ErrorMessage.CLIENT_NO_OTP_FOR_USER, userId)
+                        : null;
+                return new ValidationResponseDTO(userId, false, error);
+            }
+            SessionDTO sessionDTO;
+            try {
+                sessionDTO = new ObjectMapper().readValue(jsonString, SessionDTO.class);
+            } catch (IOException e) {
+                throw Utils.handleServerException(Constants.ErrorMessage.SERVER_JSON_SESSION_MAPPER_ERROR, null, e);
+            }
+
+            ValidationResponseDTO responseDTO = isValid(sessionDTO, emailOTP, userId, transactionId,
+                    SHOW_FAILURE_REASON,
+                    false);
+            if (!responseDTO.isValid()) {
+                return responseDTO;
+            }
+
+            return new ValidationResponseDTO(userId, true);
+        }
     }
 
-    private ValidationResponseDTO isValid(SessionDTO sessionDTO, String emailOtp, String userId,
-                                          String transactionId, boolean showFailureReason) {
+    private ValidationResponseDTO isValid(SessionDTO sessionDTO, String emailOtp, String userId, String transactionId,
+                                          boolean showFailureReason, boolean checkAccountLock)
+            throws EmailOtpException {
 
         FailureReasonDTO error;
+        User user = getUserById(userId);
+        if (checkAccountLock) {
+            if (Utils.isAccountLocked(user)) {
+                if (log.isDebugEnabled()) {
+                    log.debug(String.format("User account is locked for the user : %s.", userId));
+                }
+                return createAccountLockedResponse(userId, showFailureReason);
+            }
+        }
+
+        if (Utils.isUserDisabled(user)) {
+            if (log.isDebugEnabled()) {
+                log.debug(String.format("User account is disabled for the user : %s.", userId));
+            }
+            return createAccountDisabledResponse(userId, showFailureReason);
+        }
+
         // Check if the provided OTP is correct.
         if (!StringUtils.equals(emailOtp, sessionDTO.getOtpToken())) {
             if (log.isDebugEnabled()) {
                 log.debug(String.format("Invalid OTP provided for the user : %s.", userId));
+            }
+            if (checkAccountLock) {
+                ValidationResponseDTO responseDTO = handleAccountLock(userId, showFailureReason);
+                if (responseDTO != null) {
+                    return responseDTO;
+                }
             }
             error = showFailureReason
                     ? new FailureReasonDTO(Constants.ErrorMessage.CLIENT_OTP_VALIDATION_FAILED, userId)
                     : null;
             return new ValidationResponseDTO(userId, false, error);
         }
+
         // Check for expired OTPs.
         if (System.currentTimeMillis() > sessionDTO.getExpiryTime()) {
             if (log.isDebugEnabled()) {
@@ -229,17 +426,19 @@ public class EmailOtpServiceImpl implements EmailOtpService {
         return new ValidationResponseDTO(userId, true);
     }
 
-    private SessionDTO issueOTP(User user) throws EmailOtpException {
+    private SessionDTO issueOTP(User user, int emailOtpExpiryTime) throws EmailOtpException {
 
         boolean triggerNotification = EmailOtpServiceDataHolder.getConfigs().isTriggerNotification();
         boolean resendSameOtp = EmailOtpServiceDataHolder.getConfigs().isResendSameOtp();
+        boolean isEnableMultipleSessions = EmailOtpServiceDataHolder.getConfigs().isEnableMultipleSessions();
 
         // If 'Resend same OTP' is enabled, check if such OTP exists.
         SessionDTO sessionDTO = null;
-        if (resendSameOtp) {
+        if (resendSameOtp && !isEnableMultipleSessions) {
             sessionDTO = getPreviousValidOTPSession(user);
             // This is done in order to support 'resend throttling'.
             if (sessionDTO != null) {
+                String transactionId = sessionDTO.getTransactionId();
                 String sessionId = Utils.getHash(user.getUserID());
                 // Remove previous OTP session.
                 SessionDataStore.getInstance().clearSessionData(sessionId, Constants.SESSION_TYPE_OTP);
@@ -251,7 +450,7 @@ public class EmailOtpServiceImpl implements EmailOtpService {
 
         // If no such valid OTPs exist, generate a new OTP and proceed.
         if (sessionDTO == null) {
-            sessionDTO = generateNewOTP(user);
+            sessionDTO = generateNewOTP(user, emailOtpExpiryTime);
         }
 
         // Sending Email notifications.
@@ -261,11 +460,11 @@ public class EmailOtpServiceImpl implements EmailOtpService {
         return sessionDTO;
     }
 
-    private SessionDTO generateNewOTP(User user) throws EmailOtpServerException {
+    private SessionDTO generateNewOTP(User user, int emailOtpExpiryTime) throws EmailOtpServerException {
 
         boolean isAlphaNumericOtpEnabled = EmailOtpServiceDataHolder.getConfigs().isAlphaNumericOTP();
         int otpLength = EmailOtpServiceDataHolder.getConfigs().getOtpLength();
-        int otpValidityPeriod = EmailOtpServiceDataHolder.getConfigs().getOtpValidityPeriod();
+        boolean isEnableMultipleSessions = EmailOtpServiceDataHolder.getConfigs().isEnableMultipleSessions();
 
         // Generate OTP.
         String transactionId = Utils.createTransactionId();
@@ -276,13 +475,18 @@ public class EmailOtpServiceImpl implements EmailOtpService {
         SessionDTO sessionDTO = new SessionDTO();
         sessionDTO.setOtpToken(otp);
         sessionDTO.setGeneratedTime(System.currentTimeMillis());
-        sessionDTO.setExpiryTime(sessionDTO.getGeneratedTime() + otpValidityPeriod);
+        sessionDTO.setExpiryTime(sessionDTO.getGeneratedTime() + emailOtpExpiryTime);
         sessionDTO.setTransactionId(transactionId);
         sessionDTO.setFullQualifiedUserName(user.getFullQualifiedUsername());
         sessionDTO.setUserId(user.getUserID());
 
-        String sessionId = Utils.getHash(user.getUserID());
-        persistOTPSession(sessionDTO, sessionId);
+        if(!isEnableMultipleSessions== true) {
+            String sessionId = Utils.getHash(user.getUserID());
+            persistOTPSession(sessionDTO, sessionId);
+        } else {
+            String sessionId = Utils.getHash(user.getUserID(), transactionId);
+            persistOTPSession(sessionDTO, sessionId);
+        }
         return sessionDTO;
     }
 
@@ -363,34 +567,275 @@ public class EmailOtpServiceImpl implements EmailOtpService {
 
     private void shouldThrottle(String userId) throws EmailOtpException {
 
-        String sessionId = Utils.getHash(userId);
-        String jsonString = (String) SessionDataStore.getInstance().
-                getSessionData(sessionId, Constants.SESSION_TYPE_OTP);
-        if (StringUtils.isBlank(jsonString)) {
-            if(log.isDebugEnabled()){
-                log.debug(String.format("No OTP session found for the user : %s.", userId));
+        boolean isEnableMultipleSessions = EmailOtpServiceDataHolder.getConfigs().isEnableMultipleSessions();
+
+        SessionDTO sessionDTO = null;
+        if (!isEnableMultipleSessions) {
+            String sessionId = Utils.getHash(userId);
+            String jsonString = (String) SessionDataStore.getInstance().
+                    getSessionData(sessionId, Constants.SESSION_TYPE_OTP);
+            if (StringUtils.isBlank(jsonString)) {
+                if (log.isDebugEnabled()) {
+                    log.debug(String.format("No OTP session found for the user : %s.", userId));
+                }
+                return;
             }
-            return;
-        }
 
-        SessionDTO previousOTPSessionDTO;
-        try {
-            previousOTPSessionDTO = new ObjectMapper().readValue(jsonString, SessionDTO.class);
-        } catch (IOException e) {
-            throw Utils.handleServerException(Constants.ErrorMessage.SERVER_JSON_SESSION_MAPPER_ERROR, null, e);
-        }
+            SessionDTO previousOTPSessionDTO;
+            try {
+                previousOTPSessionDTO = new ObjectMapper().readValue(jsonString, SessionDTO.class);
+            } catch (IOException e) {
+                throw Utils.handleServerException(Constants.ErrorMessage.SERVER_JSON_SESSION_MAPPER_ERROR, null, e);
+            }
 
-        long elapsedTimeSinceLastOtp = System.currentTimeMillis() - previousOTPSessionDTO.getGeneratedTime();
-        int resendThrottleInterval = EmailOtpServiceDataHolder.getConfigs().getResendThrottleInterval();
-        if (elapsedTimeSinceLastOtp < resendThrottleInterval) {
-            long waitingPeriod = (resendThrottleInterval - elapsedTimeSinceLastOtp) / 1000;
-            throw Utils.handleClientException(
-                    Constants.ErrorMessage.CLIENT_SLOW_DOWN_RESEND, String.valueOf(waitingPeriod));
+            long elapsedTimeSinceLastOtp = System.currentTimeMillis() - previousOTPSessionDTO.getGeneratedTime();
+            int resendThrottleInterval = EmailOtpServiceDataHolder.getConfigs().getResendThrottleInterval();
+            if (elapsedTimeSinceLastOtp < resendThrottleInterval) {
+                long waitingPeriod = (resendThrottleInterval - elapsedTimeSinceLastOtp) / 1000;
+                throw Utils.handleClientException(
+                        Constants.ErrorMessage.CLIENT_SLOW_DOWN_RESEND, String.valueOf(waitingPeriod));
+            }
+        } else {
+            String sessionId = Utils.getHash(userId, sessionDTO.getTransactionId());
+            String jsonString = (String) SessionDataStore.getInstance().
+                    getSessionData(sessionId, Constants.SESSION_TYPE_OTP);
+            if (StringUtils.isBlank(jsonString)) {
+                if(log.isDebugEnabled()){
+                    log.debug(String.format("No OTP session found for the user : %s.", userId));
+                }
+                return;
+            }
+
+            SessionDTO previousOTPSessionDTO;
+            try {
+                previousOTPSessionDTO = new ObjectMapper().readValue(jsonString, SessionDTO.class);
+            } catch (IOException e) {
+                throw Utils.handleServerException(Constants.ErrorMessage.SERVER_JSON_SESSION_MAPPER_ERROR, null, e);
+            }
+
+            long elapsedTimeSinceLastOtp = System.currentTimeMillis() - previousOTPSessionDTO.getGeneratedTime();
+            int resendThrottleInterval = EmailOtpServiceDataHolder.getConfigs().getResendThrottleInterval();
+            if (elapsedTimeSinceLastOtp < resendThrottleInterval) {
+                long waitingPeriod = (resendThrottleInterval - elapsedTimeSinceLastOtp) / 1000;
+                throw Utils.handleClientException(
+                        Constants.ErrorMessage.CLIENT_SLOW_DOWN_RESEND, String.valueOf(waitingPeriod));
+            }
         }
     }
 
     private int getTenantId() {
 
         return PrivilegedCarbonContext.getThreadLocalCarbonContext().getTenantId();
+    }
+
+    /**
+     * Reset OTP Failed Attempts count upon successful completion of the OTP verification.
+     *
+     * @param userId The ID of the user.
+     * @throws EmailOtpException If an error occurred.
+     */
+    private void resetOtpFailedAttempts(String userId) throws EmailOtpException {
+
+        if (!EmailOtpServiceDataHolder.getConfigs().isLockAccountOnFailedAttempts()) {
+            return;
+        }
+
+        User user = getUserById(userId);
+        Property[] connectorConfigs = Utils.getAccountLockConnectorConfigs(user.getTenantDomain());
+        // Return if account lock handler is not enabled.
+        for (Property connectorConfig : connectorConfigs) {
+            if ((ACCOUNT_LOCKED_PROPERTY.equals(connectorConfig.getName())) &&
+                    !Boolean.parseBoolean(connectorConfig.getValue())) {
+                return;
+            }
+        }
+
+        try {
+            AbstractUserStoreManager userStoreManager = (AbstractUserStoreManager) EmailOtpServiceDataHolder
+                    .getInstance().getRealmService().getTenantUserRealm(getTenantId()).getUserStoreManager();
+
+            String[] claimsToCheck = {Constants.EMAIL_OTP_FAILED_ATTEMPTS_CLAIM, Constants.ACCOUNT_LOCKED_CLAIM};
+            Map<String, String> userClaims = userStoreManager.getUserClaimValues(user.getDomainQualifiedUsername(),
+                    claimsToCheck, UserCoreConstants.DEFAULT_PROFILE);
+            String failedEmailOtpAttemptsClaimValue = userClaims.get(Constants.EMAIL_OTP_FAILED_ATTEMPTS_CLAIM);
+            String accountLockClaimValue = userClaims.get(Constants.ACCOUNT_LOCKED_CLAIM);
+
+            Map<String, String> updatedClaims = new HashMap<>();
+            if (NumberUtils.isNumber(failedEmailOtpAttemptsClaimValue) &&
+                    Integer.parseInt(failedEmailOtpAttemptsClaimValue) > 0) {
+                updatedClaims.put(Constants.EMAIL_OTP_FAILED_ATTEMPTS_CLAIM, "0");
+            }
+            if (Boolean.parseBoolean(accountLockClaimValue)) {
+                updatedClaims.put(Constants.ACCOUNT_LOCKED_CLAIM, Boolean.FALSE.toString());
+                updatedClaims.put(Constants.ACCOUNT_UNLOCK_TIME_CLAIM, "0");
+            }
+            if (!updatedClaims.isEmpty()) {
+                userStoreManager.setUserClaimValues(user.getDomainQualifiedUsername(), updatedClaims,
+                        UserCoreConstants.DEFAULT_PROFILE);
+            }
+        } catch (UserStoreException e) {
+            String errorMessage = String.format("Failed to reset failed attempts count for user ID : %s.",
+                    user.getUserID());
+            throw Utils.handleServerException(Constants.ErrorMessage.SERVER_USER_STORE_MANAGER_ERROR,
+                    errorMessage, e);
+        }
+    }
+
+    private ValidationResponseDTO handleAccountLock(String userId, boolean showFailureReason) throws
+            EmailOtpException {
+
+        boolean lockAccountOnFailedAttempts = EmailOtpServiceDataHolder.getConfigs().isLockAccountOnFailedAttempts();
+        if (!lockAccountOnFailedAttempts) {
+            return null;
+        }
+
+        User user = getUserById(userId);
+        if (Utils.isAccountLocked(user)) {
+            return createAccountLockedResponse(userId, showFailureReason);
+        }
+
+        int maxAttempts = 0;
+        long unlockTimePropertyValue = 0;
+        double unlockTimeRatio = 1;
+
+        Property[] connectorConfigs = Utils.getAccountLockConnectorConfigs(user.getTenantDomain());
+        for (Property connectorConfig : connectorConfigs) {
+            switch (connectorConfig.getName()) {
+                case ACCOUNT_LOCKED_PROPERTY:
+                    if (!Boolean.parseBoolean(connectorConfig.getValue())) {
+                        return null;
+                    }
+                case FAILED_LOGIN_ATTEMPTS_PROPERTY:
+                    if (NumberUtils.isNumber(connectorConfig.getValue())) {
+                        maxAttempts = Integer.parseInt(connectorConfig.getValue());
+                    }
+                    break;
+                case ACCOUNT_UNLOCK_TIME_PROPERTY:
+                    if (NumberUtils.isNumber(connectorConfig.getValue())) {
+                        unlockTimePropertyValue = Integer.parseInt(connectorConfig.getValue());
+                    }
+                    break;
+                case LOGIN_FAIL_TIMEOUT_RATIO_PROPERTY:
+                    if (NumberUtils.isNumber(connectorConfig.getValue())) {
+                        double value = Double.parseDouble(connectorConfig.getValue());
+                        if (value > 0) {
+                            unlockTimeRatio = value;
+                        }
+                    }
+                    break;
+            }
+        }
+
+        Map<String, String> claimValues = getUserClaimValues(user, new String[]{
+                Constants.EMAIL_OTP_FAILED_ATTEMPTS_CLAIM, Constants.FAILED_LOGIN_LOCKOUT_COUNT_CLAIM});
+        if (claimValues == null) {
+            claimValues = new HashMap<>();
+        }
+
+        int currentAttempts = getCurrentAttempts(claimValues);
+        int failedLoginLockoutCountValue = getFailedLoginLockoutCount(claimValues);
+
+        Map<String, String> updatedClaims = new HashMap<>();
+        if ((currentAttempts + 1) >= maxAttempts) {
+            // Calculate the incremental unlock time interval in milli seconds.
+            unlockTimePropertyValue = (long) (unlockTimePropertyValue * 1000 * 60 * Math.pow(unlockTimeRatio,
+                    failedLoginLockoutCountValue));
+            populateAccountLockClaims(unlockTimePropertyValue, failedLoginLockoutCountValue, updatedClaims);
+            setUserClaimValues(user, updatedClaims);
+            return createAccountLockedResponse(userId, showFailureReason);
+        } else {
+            updatedClaims.put(Constants.EMAIL_OTP_FAILED_ATTEMPTS_CLAIM, String.valueOf(currentAttempts + 1));
+            setUserClaimValues(user, updatedClaims);
+            return null;
+        }
+    }
+
+    private ValidationResponseDTO createAccountLockedResponse(String userId, boolean showFailureReason) {
+
+        FailureReasonDTO error = showFailureReason
+                ? new FailureReasonDTO(Constants.ErrorMessage.CLIENT_ACCOUNT_LOCKED, userId)
+                : null;
+        return new ValidationResponseDTO(userId, false, error);
+    }
+
+    private ValidationResponseDTO createAccountDisabledResponse(String userId, boolean showFailureReason) {
+
+        FailureReasonDTO error = showFailureReason
+                ? new FailureReasonDTO(Constants.ErrorMessage.CLIENT_ACCOUNT_DISABLED, userId)
+                : null;
+        return new ValidationResponseDTO(userId, false, error);
+    }
+
+    private int getCurrentAttempts(Map<String, String> claimValues) {
+
+        if (NumberUtils.isNumber(claimValues.get(Constants.EMAIL_OTP_FAILED_ATTEMPTS_CLAIM))) {
+            return Integer.parseInt(claimValues.get(Constants.EMAIL_OTP_FAILED_ATTEMPTS_CLAIM));
+        }
+        return 0;
+    }
+
+    private int getFailedLoginLockoutCount(Map<String, String> claimValues) {
+
+        if (NumberUtils.isNumber(claimValues.get(Constants.FAILED_LOGIN_LOCKOUT_COUNT_CLAIM))) {
+            return Integer.parseInt(claimValues.get(Constants.FAILED_LOGIN_LOCKOUT_COUNT_CLAIM));
+        }
+        return 0;
+    }
+
+    private void populateAccountLockClaims(long unlockTimePropertyValue, int failedLoginLockoutCountValue,
+                                           Map<String, String> updatedClaims) {
+
+        // Calculate unlock time by adding current time and unlock time interval in milliseconds.
+        long unlockTime = System.currentTimeMillis() + unlockTimePropertyValue;
+        updatedClaims.put(Constants.ACCOUNT_LOCKED_CLAIM, Boolean.TRUE.toString());
+        updatedClaims.put(Constants.EMAIL_OTP_FAILED_ATTEMPTS_CLAIM, "0");
+        updatedClaims.put(Constants.ACCOUNT_UNLOCK_TIME_CLAIM, String.valueOf(unlockTime));
+        updatedClaims.put(Constants.FAILED_LOGIN_LOCKOUT_COUNT_CLAIM,
+                String.valueOf(failedLoginLockoutCountValue + 1));
+        updatedClaims.put(Constants.ACCOUNT_LOCKED_REASON_CLAIM_URI, Constants.MAX_EMAIL_OTP_ATTEMPTS_EXCEEDED);
+        IdentityUtil.threadLocalProperties.get().put(Constants.ADMIN_INITIATED, false);
+    }
+
+    private Map<String, String> getUserClaimValues(User user, String[] claims) throws EmailOtpServerException {
+
+        try {
+            AbstractUserStoreManager userStoreManager = (AbstractUserStoreManager) EmailOtpServiceDataHolder
+                    .getInstance().getRealmService().getTenantUserRealm(getTenantId()).getUserStoreManager();
+            return userStoreManager.getUserClaimValues(user.getDomainQualifiedUsername(), claims,
+                    UserCoreConstants.DEFAULT_PROFILE);
+        } catch (UserStoreException e) {
+            throw Utils.handleServerException(Constants.ErrorMessage.SERVER_USER_STORE_MANAGER_ERROR,
+                    String.format("Failed to read user claims for user ID : %s.", user.getUserID()), e);
+        }
+    }
+
+    private void setUserClaimValues(User user, Map<String, String> updatedClaims) throws EmailOtpServerException {
+
+        try {
+            AbstractUserStoreManager userStoreManager = (AbstractUserStoreManager) EmailOtpServiceDataHolder
+                    .getInstance().getRealmService().getTenantUserRealm(getTenantId()).getUserStoreManager();
+            userStoreManager.setUserClaimValues(user.getDomainQualifiedUsername(), updatedClaims,
+                    UserCoreConstants.DEFAULT_PROFILE);
+        } catch (UserStoreException e) {
+            throw Utils.handleServerException(Constants.ErrorMessage.SERVER_USER_STORE_MANAGER_ERROR,
+                    String.format("Failed to update user claims for user ID: %s.", user.getUserID()), e);
+        }
+    }
+
+    private User getUserById(String userId) throws EmailOtpException {
+
+        try {
+            AbstractUserStoreManager userStoreManager = (AbstractUserStoreManager) EmailOtpServiceDataHolder
+                    .getInstance().getRealmService().getTenantUserRealm(getTenantId()).getUserStoreManager();
+            return userStoreManager.getUser(userId, null);
+        } catch (UserStoreException e) {
+            // Handle user not found.
+            String errorCode = ((org.wso2.carbon.user.core.UserStoreException) e).getErrorCode();
+            if (UserCoreErrorConstants.ErrorMessages.ERROR_CODE_NON_EXISTING_USER.getCode().equals(errorCode)) {
+                throw Utils.handleClientException(Constants.ErrorMessage.CLIENT_INVALID_USER_ID, userId);
+            }
+            throw Utils.handleServerException(Constants.ErrorMessage.SERVER_USER_STORE_MANAGER_ERROR,
+                    String.format("Error while retrieving user for the ID : %s.", userId), e);
+        }
     }
 }
