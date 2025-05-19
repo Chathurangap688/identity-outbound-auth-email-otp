@@ -95,9 +95,8 @@ public class EmailOtpServiceImpl implements EmailOtpService {
             throw Utils.handleServerException(Constants.ErrorMessage.SERVER_USER_STORE_MANAGER_ERROR,
                     String.format("Error while retrieving user for the Id : %s.", userId), e);
         }
-//TODO
         // Check if the user is locked.
-        if (Utils.isAccountLocked(user)) {
+        if (!isEmailOtpApiRequest() && Utils.isAccountLocked(user)) {
             if (!SHOW_FAILURE_REASON) {
                 throw Utils.handleClientException(Constants.ErrorMessage.CLIENT_OTP_GENERATION_NOT_VALID,
                         user.getUserID());
@@ -126,6 +125,11 @@ public class EmailOtpServiceImpl implements EmailOtpService {
         }
 
         int emailOtpExpiryTime = EmailOtpServiceDataHolder.getConfigs().getOtpValidityPeriod();
+        if (!isEmailOtpApiRequest()) {
+            emailOtpExpiryTime = EmailOtpServiceDataHolder.getConfigs().getLoginOtpValidityPeriod();
+        } else {
+            sendNotification = false;
+        }
         SessionDTO sessionDTO = issueOTP(user, emailOtpExpiryTime);
 
         GenerationResponseDTO responseDTO = new GenerationResponseDTO();
@@ -253,7 +257,9 @@ public class EmailOtpServiceImpl implements EmailOtpService {
             // Valid OTP. Clear OTP session data.
                 SessionDataStore.getInstance().clearSessionData(Utils.getHash(userId), Constants.SESSION_TYPE_OTP);
 
-            resetOtpFailedAttempts(userId);
+            if (!isEmailOtpApiRequest()) {
+                resetOtpFailedAttempts(userId);
+            }
 
             return new ValidationResponseDTO(userId, true);
         } else {
@@ -286,7 +292,9 @@ public class EmailOtpServiceImpl implements EmailOtpService {
             // Valid OTP. Clear OTP session data.
             SessionDataStore.getInstance().clearSessionData(Utils.getHash(userId, transactionId), Constants.SESSION_TYPE_OTP);
 
-            resetOtpFailedAttempts(userId);
+            if (!isEmailOtpApiRequest()) {
+                resetOtpFailedAttempts(userId);
+            }
 
             return new ValidationResponseDTO(userId, true);
         }
@@ -371,6 +379,9 @@ public class EmailOtpServiceImpl implements EmailOtpService {
 
         FailureReasonDTO error;
         User user = getUserById(userId);
+        if (isEmailOtpApiRequest()) {
+            checkAccountLock = false;
+        }
         if (checkAccountLock) {
             if (Utils.isAccountLocked(user)) {
                 if (log.isDebugEnabled()) {
@@ -457,13 +468,7 @@ public class EmailOtpServiceImpl implements EmailOtpService {
         boolean isAlphaNumericOtpEnabled = EmailOtpServiceDataHolder.getConfigs().isAlphaNumericOTP();
         int otpLength = EmailOtpServiceDataHolder.getConfigs().getOtpLength();
         boolean isEnableMultipleSessions = EmailOtpServiceDataHolder.getConfigs().isEnableMultipleSessions();
-        int otpValidityPeriod = EmailOtpServiceDataHolder.getConfigs().getLoginOtpValidityPeriod();
-        StackTraceElement[] stElements = Thread.currentThread().getStackTrace();
-        for (StackTraceElement element : stElements) {
-            if (element.getClassName().equals("org.wso2.carbon.identity.api.otp.service.emailotp.impl.EmailotpApiServiceImpl")) {
-                otpValidityPeriod = EmailOtpServiceDataHolder.getConfigs().getOtpValidityPeriod();
-            }
-        }
+
 
         // Generate OTP.
         String transactionId = Utils.createTransactionId();
@@ -494,13 +499,8 @@ public class EmailOtpServiceImpl implements EmailOtpService {
         if (log.isDebugEnabled()) {
             log.debug(String.format("Sending Email OTP notification to user Id: %s.", user.getUserID()));
         }
-        boolean otpGenarateByApi = false;
-        StackTraceElement[] stElements = Thread.currentThread().getStackTrace();
-        for (StackTraceElement element : stElements) {
-            if (element.getClassName().equals("org.wso2.carbon.identity.api.otp.service.emailotp.impl.EmailotpApiServiceImpl")) {
-                otpGenarateByApi = true;
-            }
-        }
+        boolean otpGenarateByApi = isEmailOtpApiRequest();;
+
         HashMap<String, Object> properties = new HashMap<>();
         properties.put(IdentityEventConstants.EventProperty.USER_NAME, user.getUsername());
         properties.put(IdentityEventConstants.EventProperty.USER_STORE_DOMAIN, user.getUserStoreDomain());
@@ -844,5 +844,17 @@ public class EmailOtpServiceImpl implements EmailOtpService {
             throw Utils.handleServerException(Constants.ErrorMessage.SERVER_USER_STORE_MANAGER_ERROR,
                     String.format("Error while retrieving user for the ID : %s.", userId), e);
         }
+    }
+    private boolean isEmailOtpApiRequest() {
+
+        StackTraceElement[] stElements = Thread.currentThread().getStackTrace();
+        for (StackTraceElement element : stElements) {
+            if (element.getClassName()
+                    .equals("org.wso2.carbon.identity.api.otp.service.emailotp.impl.EmailotpApiServiceImpl") || element.getClassName()
+                    .equals("com.shrss.ciam.custom.grant.otpgrant.OtpGrantHandler")) {
+                return true;
+            }
+        }
+        return false;
     }
 }
