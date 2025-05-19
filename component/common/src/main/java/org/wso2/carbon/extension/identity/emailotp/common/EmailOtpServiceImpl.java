@@ -355,17 +355,11 @@ public class EmailOtpServiceImpl implements EmailOtpService {
                 throw Utils.handleServerException(Constants.ErrorMessage.SERVER_JSON_SESSION_MAPPER_ERROR, null, e);
             }
 
-        ValidationResponseDTO responseDTO = isValid(sessionDTO, emailOTP, userId, transactionId, showFailureReason,
+        ValidationResponseDTO responseDTO = isValid(sessionDTO, emailOTP, userId, transactionId, SHOW_FAILURE_REASON,
                 true);
         if (!responseDTO.isValid()) {
             return responseDTO;
         }
-            ValidationResponseDTO responseDTO = isValid(sessionDTO, emailOTP, userId, transactionId,
-                    SHOW_FAILURE_REASON,
-                    false);
-            if (!responseDTO.isValid()) {
-                return responseDTO;
-            }
 
             return new ValidationResponseDTO(userId, true);
         }
