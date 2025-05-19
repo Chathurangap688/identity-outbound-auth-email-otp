@@ -137,6 +137,16 @@ public class ConfigsDTO {
         this.resendThrottleInterval = resendThrottleInterval;
     }
 
+    public boolean isEnableMultipleSessions() {
+
+        return this.isEnableMultipleSessions;
+    }
+
+    public void setEnableMultipleSessions(boolean enableMultipleSessions) {
+
+        isEnableMultipleSessions = enableMultipleSessions;
+    }
+
     public int getLoginOtpValidityPeriod() {
 
         return loginOtpValidityPeriod;
