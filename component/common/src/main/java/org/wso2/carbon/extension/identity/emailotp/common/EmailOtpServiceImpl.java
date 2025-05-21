@@ -171,7 +171,7 @@ public class EmailOtpServiceImpl implements EmailOtpService {
             }
 
             // Check if the user is locked.
-            if (Utils.isAccountLocked(user)) {
+            if (!isEmailOtpApiRequest() && Utils.isAccountLocked(user)) {
                 if (!SHOW_FAILURE_REASON) {
                     throw Utils.handleClientException(Constants.ErrorMessage.CLIENT_OTP_GENERATION_NOT_VALID,
                             user.getUserID());
@@ -380,7 +380,7 @@ public class EmailOtpServiceImpl implements EmailOtpService {
     }
 
     private ValidationResponseDTO isValid(SessionDTO sessionDTO, String emailOtp, String userId, String transactionId,
-                                          boolean showFailureReason, boolean checkAccountLock)
+            boolean showFailureReason, boolean checkAccountLock)
             throws EmailOtpException {
 
         FailureReasonDTO error;
@@ -408,6 +408,12 @@ public class EmailOtpServiceImpl implements EmailOtpService {
         if (!StringUtils.equals(emailOtp, sessionDTO.getOtpToken())) {
             if (log.isDebugEnabled()) {
                 log.debug(String.format("Invalid OTP provided for the user : %s.", userId));
+            }
+            if (checkAccountLock) {
+                ValidationResponseDTO responseDTO = handleAccountLock(userId, showFailureReason);
+                if (responseDTO != null) {
+                    return responseDTO;
+                }
             }
             error = showFailureReason
                     ? new FailureReasonDTO(Constants.ErrorMessage.CLIENT_OTP_VALIDATION_FAILED, userId)
