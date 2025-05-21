@@ -225,7 +225,10 @@ public class EmailOtpServiceImpl implements EmailOtpService {
         }
 
         boolean isEnableMultipleSessions = EmailOtpServiceDataHolder.getConfigs().isEnableMultipleSessions();
-
+        // Disable multiple sessions for login otp
+        if (!isEmailOtpApiRequest()) {
+            isEnableMultipleSessions  = false;
+        }
         // Retrieve session from the database.
 
         if(!isEnableMultipleSessions) {
@@ -304,7 +307,10 @@ public class EmailOtpServiceImpl implements EmailOtpService {
     public ValidationResponseDTO verifyEmailOTP(String transactionId, String userId, String emailOTP) throws EmailOtpException {
 
         boolean isEnableMultipleSessions = EmailOtpServiceDataHolder.getConfigs().isEnableMultipleSessions();
-
+        // Disable multiple sessions for login otp
+        if (!isEmailOtpApiRequest()) {
+            isEnableMultipleSessions  = false;
+        }
         // Sanitize inputs.
         if (StringUtils.isBlank(transactionId) || StringUtils.isBlank(userId) || StringUtils.isBlank(emailOTP)) {
             String missingParam = StringUtils.isBlank(transactionId) ? "transactionId"
@@ -473,7 +479,10 @@ public class EmailOtpServiceImpl implements EmailOtpService {
         boolean isAlphaNumericOtpEnabled = EmailOtpServiceDataHolder.getConfigs().isAlphaNumericOTP();
         int otpLength = EmailOtpServiceDataHolder.getConfigs().getOtpLength();
         boolean isEnableMultipleSessions = EmailOtpServiceDataHolder.getConfigs().isEnableMultipleSessions();
-
+        // Disable multiple sessions for login otp
+        if (!isEmailOtpApiRequest()) {
+            isEnableMultipleSessions  = false;
+        }
 
         // Generate OTP.
         String transactionId = Utils.createTransactionId();
@@ -580,7 +589,10 @@ public class EmailOtpServiceImpl implements EmailOtpService {
     private void shouldThrottle(String userId) throws EmailOtpException {
 
         boolean isEnableMultipleSessions = EmailOtpServiceDataHolder.getConfigs().isEnableMultipleSessions();
-
+        // Disable multiple sessions for login otp
+        if (!isEmailOtpApiRequest()) {
+            isEnableMultipleSessions  = false;
+        }
         SessionDTO sessionDTO = null;
         if (!isEnableMultipleSessions) {
             String sessionId = Utils.getHash(userId);
