@@ -435,6 +435,11 @@ public class EmailOtpServiceImpl implements EmailOtpService {
         boolean resendSameOtp = EmailOtpServiceDataHolder.getConfigs().isResendSameOtp();
         boolean isEnableMultipleSessions = EmailOtpServiceDataHolder.getConfigs().isEnableMultipleSessions();
 
+        // Disable multiple sessions for login otp
+        if (!isEmailOtpApiRequest()) {
+            isEnableMultipleSessions  = false;
+        }
+
         // If 'Resend same OTP' is enabled, check if such OTP exists.
         SessionDTO sessionDTO = null;
         if (resendSameOtp && !isEnableMultipleSessions) {
